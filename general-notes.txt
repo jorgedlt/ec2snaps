@@ -1,0 +1,451 @@
+AWS CLI Queries and jq
+https://theagileadmin.com/2017/05/26/aws-cli-queries-and-jq/
+
+ ####
+i-0013d4c060cbf7cf3  running  vpc-8e30a0e8  t2.small    10.1.100.114  54.175.196.250  DIYZ-SCALE-BASTION
+i-0c8960bd8cdbfa966  running  vpc-8e30a0e8  t2.medium   10.1.101.29   None            DIYZ-SCALE-ADMIN
+
+# as per the EC2 Instance
+attachment.status - The attachment state (attaching | attached | detaching | detached ).
+
+# as per the volume itself
+status - The status of the volume (creating | available | in-use | deleting | deleted | error ).
+
+# finding unused volumes
+aws ec2 describe-volumes --filters Name=status,Values=available | jq .
+
+# Show Vols with EC2 Names
+aws ec2 describe-tags --query "Tags[*].{Name:Value,ResourceId:ResourceId}" \
+ --filters "Name=key,Values=Name"  \
+ --filters "Name=resource-type,Values=volume" \
+ --output json | jq .
+
+ # see volls
+# list my ami's
+aws ec2 describe-images --owners 034682535984 | jq .
+
+# does not work
+aws ec2 describe-images --region us-east-1 \
+--filter "Name=is-public,Values=false" \
+--filter "Name=architecture, Values=x86_64" \
+--filter "Name=owner,Values=034682535984d"\
+--query "Images[*].{size:[BlockDeviceMappings[].Ebs.VolumeSize],date:CreationDate}"
+
+# does not work
+ aws ec2 describe-images --region us-east-1 \
+--filter "Name=is-public,Values=false" --filter "Name=architecture, Values=x86_64" --filter "Name=owner,Values=034682535984"\
+--query "Images[*].{size:[BlockDeviceMappings[].Ebs.VolumeSize],date:CreationDate}"
+
+#
+
+aws ec2 describe-snapshots --owner 034682535984 --query 'Snapshots[?State==`pending`].[SnapshotId,VolumeSize,Progress,StartTime]' --output table
+
+
+###
+
+volstat () {
+# finding volumes for a given EC2 instance
+#
+export ec2ID=$1
+  echo
+  #
+  aws ec2 describe-instances --instance-ids ${ec2ID} \
+    --query 'Reservations[*].Instances[*].[InstanceId,State.Name,InstanceType,Tags[?Key==`Name`].Value[]]' \
+    | egrep -v '\[|\]' | tr -d ' |"' | tr '\012' ' ' ; echo
+  #
+  aws ec2 describe-volumes --region us-west-1 \
+    --filters Name=attachment.instance-id,Values="${ec2ID}" \
+    Name=attachment.delete-on-termination,Values=true | jq .
+}
+#
+
+aws ec2 describe-snapshots --filters "Name=volume-id, Values=vol-00b17c765830a7076,vol-00b17c765830a7076" | jq .
+
+# owner-id
+aws ec2 describe-snapshots --filters "Name=owner-id , Values=vol-769142613859,769142613859"
+
+# Find the most recent snapshot for an AWS EBS volume
+# max-by = most recent / min_by oldest
+#
+export volID='vol-f0a13121'
+#
+aws ec2 describe-snapshots --filter "Name=volume-id,Values=${volID}" | jq '.[]|max_by(.StartTime)|.SnapshotId' | jq .
+#
+
+# Deleting_old_Amazon_EBS_snapshots - excellent - how to
+https://wincent.com/wiki/Deleting_old_Amazon_EBS_snapshots
+
+# create-snapshot
+export ec2ID='i-060597d44407b2770'
+export volID='vol-00b17c765830a7076'
+#
+aws ec2 create-snapshot --volume-id "${volID}" \
+--description "intance ${ec2ID} volume ${volID}" | jq .
+
+{
+  "Description": "intance i-060597d44407b2770 volume vol-00b17c765830a7076",
+  "Encrypted": false,
+  "VolumeId": "vol-00b17c765830a7076",
+  "State": "pending",
+  "VolumeSize": 20,
+  "StartTime": "2017-08-16T18:38:46.000Z",
+  "Progress": "",
+  "OwnerId": "769142613859",
+  "SnapshotId": "snap-0db93cef778125fbf"
+}
+
+######
+
+# create-image AMI
+export ec2ID='i-077a76a6ea5c7ac4d'
+export volID='vol-f0a13121'
+#
+aws ec2 create-image --instance-id ${ec2ID} \
+--no-reboot \
+--name "instance ${ec2ID} volume ${volID} -- try 2" | jq .
+
+  "ImageId": "ami-e6c8fa9d"
+  "ImageId": "ami-2c9eac57"
+
+
+# list AMI by owner
+# list my ami's
+aws ec2 describe-images --owners 979912621417 | jq .
+
+{
+  "VirtualizationType": "hvm",
+  "Name": "instance i-077a76a6ea5c7ac4d volume vol-f0a13121",
+  "Hypervisor": "xen",
+  "SriovNetSupport": "simple",
+  "ImageId": "ami-e6c8fa9d",
+  "State": "pending",
+  "BlockDeviceMappings": [
+    {
+      "DeviceName": "/dev/xvda",
+      "Ebs": {
+        "Encrypted": false,
+        "DeleteOnTermination": true,
+        "VolumeType": "gp2",
+        "VolumeSize": 8,
+        "SnapshotId": "snap-060db0b2bf393f3d5"
+      }
+    }
+  ],
+  "Architecture": "x86_64",
+  "ImageLocation": "979912621417/instance i-077a76a6ea5c7ac4d volume vol-f0a13121",
+  "RootDeviceType": "ebs",
+  "OwnerId": "979912621417",
+  "RootDeviceName": "/dev/xvda",
+  "CreationDate": "2017-08-16T14:51:54.000Z",
+  "Public": false,
+  "ImageType": "machine"
+},
+
+#
+aws ec2 describe-images --filters Name=name,Values="instance i-077a76a6ea5c7ac4d volume vol-f0a13121" | jq .
+
+ aws ec2 deregister-image --image-id ami-e6c8fa9d
+
+######
+
+Questions to AWS - regards to archivng 'GENRAL EC2'
+
+Best to use snapshots or image == snapshots /
+if 'Image' the same as 'AMI' -- answer 'YES'
+can I only have ONE AMI per Ec2 as backup ? == 'No, I can many'
+
+if I use snapshots, how can tell which are oldest vs newest ?
+Why can I see other people snapshots ?
+
+why do I need to use the --owner flagg to limit queries to just machinewhat can be done with other people's snaps ??
+is this a security risk we should worry about ?
+if I use snapshots how to I make thim into an image so I can re-launch my recovered ec2
+
+###
+
+jld0517@UKRA:~$ aws ec2 delete-snapshot --snapshot-id snap-0db93cef778125fbf | jq .
+jld0517@UKRA:~$
+jld0517@UKRA:~$
+jld0517@UKRA:~$ aws ec2 describe-snapshots --filters "Name=volume-id, Values=vol-00b17c765830a7076,vol-00b17c765830a7076" | jq .
+
+
+######
+
+aws ec2 describe-snapshots --owner 979912621417 \
+--query 'Snapshots[*].{ID:SnapshotId,Time:StartTime}' | jq .
+
+#--filters Name=tag-key,Values="Group" Name=tag-value,Values="Prod"
+
+export starttime=$(gdate -u '+%FT%TZ' -d '7 days ago') \
+
+
+aws ec2 describe-snapshots --output text | sort -k 5 | head -200
+
+aws ec2 describe-snapshots \
+--query 'Snapshots[*].{ID:SnapshotId,Time:$StartTime}'
+
+aws ec2 delete-snapshot --snapshot-id snap-4e665454
+
+#####
+
+aws ec2 describe-instances \
+ --output text \
+  --query 'Reservations[].Instances[].[Tags[?Key==`Name`].Value|[0],InstanceId]'
+
+# Display InstanceId of instances which have no Name tag:
+  aws ec2 describe-instances \
+    --output text \
+     --query 'Reservations[].Instances[?!not_null(Tags[?Key == `Name`].Value)] | [].[InstanceId]'
+
+# Display InstanceId of running instances which have no Owner tag:
+aws ec2 describe-instances \
+  --output text \
+   --filters Name=instance-state-name,Values=running \
+   --query 'Reservations[].Instances[?!not_null(Tags[?Key == `Owner`].Value)] | [].[InstanceId]'
+
+# https://blog.corpinfo.com/using-aws-cli-to-find-untagged-instances
+
+### How to clean up Amazon EBS Volumes and Snapshots
+http://www.robertsindall.co.uk/blog/blog/2013/04/20/how-to-clean-up-amazon-ebs-volumes-and-snapshots/
+
+# EBS Volumes available to remove
+aws ec2 describe-volumes --region us-east-1 | grep available | awk '{print $2}' | tr '\n' ' '
+
+# All Snapshots - tried text and table - neither weems to work
+aws ec2 describe-snapshots --region us-east-1 --output table | grep SNAPSHOT | awk '{print $2}' | sort | uniq
+
+# All Snapshots not in use by any AMI’s // delete all volumes which are unattached
+ec2-delete-volume --regionus-east-1 $(aws ec2 describe-volumes --region us-east-1  | grep available | awk '{print $2}' | tr '\n' ' ')
+
+#
+aws ec2 monitor-instances --instance-ids i-44a44ac3
+
+http://www.thegeekstuff.com/2016/04/aws-ec2-cli-examples/
+
+yet another useless script https://devopsideas.com/automate-ebs-volume-snapshot/
+
+
+
+
+
+•*´¯)¸.•*´¯)¤ª"˜¨¯¯¨˜ " jorgedlt@gmail.com " ˜¨¯¯¨˜"ª¤(¯`*•.¸(¯`*•
+
+
+Jorge de la Torre <jorgedlt@gmail.com>
+3:23 PM (4 hours ago)
+
+to me
+#!/bin/bash
+#Script to create AMI of server on daily basis and deleting AMI older than n no of days
+#By Ravi Gadgil
+
+echo -e "----------------------------------\n   `date`   \n----------------------------------"
+
+#To create a unique AMI name for this script
+echo "instance-`gdate +%d%b%y`" > /tmp/aminame.txt
+
+echo -e "Starting the Daily AMI creation: `cat /tmp/aminame.txt`\n"
+
+#To create AMI of defined instance
+aws ec2 create-image --instance-id $1 --name "`cat /tmp/aminame.txt`" --description "This is for Daily auto AMI creation" --no-reboot | grep -i ami | awk '{print $4}' > /tmp/amiID.txt
+
+#Showing the AMI name created by AWS
+echo -e "AMI ID is: `cat /tmp/amiID.txt`\n"
+# echo i-01dc7c9a081822176 > /tmp/amiID.txt
+
+echo -e "Looking for AMI older than 3 days:\n "
+
+#Finding AMI older than 3 days which needed to be removed
+echo "instance-`gdate +%d%b%y --date '4 days ago'`" > /tmp/amidel.txt
+
+#Finding Image ID of instance which needed to be Deregistered
+aws ec2 describe-images --filters "Name=name,Values=`cat /tmp/amidel.txt`" | grep -i imageid | awk '{ print  $4 }' > /tmp/imageid.txt
+
+if [[ -s /tmp/imageid.txt ]];
+then
+
+echo -e "Following AMI is found : `cat /tmp/imageid.txt`\n"
+
+#Find the snapshots attached to the Image need to be Deregister
+aws ec2 describe-images --image-ids `cat /tmp/imageid.txt` | grep snap | awk ' { print $4 }' > /tmp/snap.txt
+
+echo -e "Following are the snapshots associated with it : `cat /tmp/snap.txt`:\n "
+
+echo -e "Starting the Deregister of AMI... \n"
+
+#Deregistering the AMI
+aws ec2 deregister-image --image-id `cat /tmp/imageid.txt`
+
+echo -e "\nDeleting the associated snapshots.... \n"
+
+#Deleting snapshots attached to AMI
+for i in `cat /tmp/snap.txt`;do aws ec2 delete-snapshot --snapshot-id $i ; done
+
+else
+
+echo -e "No AMI found older than minimum required no of days"
+fi
+
+
+•*´¯)¸.•*´¯)¤ª"˜¨¯¯¨˜ " jorgedlt@gmail.com " ˜¨¯¯¨˜"ª¤(¯`*•.¸(¯`*•
+
+
+---------- Forwarded message ----------
+From: Jorge de la Torre <jorgedlt@gmail.com>
+Date: Tue, Aug 15, 2017 at 3:22 PM
+Subject: volume notes
+To: JorgeDLT Personal <jorgedlt@gmail.com>
+
+
+AWS CLI Queries and jq
+https://theagileadmin.com/2017/05/26/aws-cli-queries-and-jq/
+
+ ####
+
+i-0013d4c060cbf7cf3  running  vpc-8e30a0e8  t2.small    10.1.100.114  54.175.196.250  DIYZ-SCALE-BASTION
+i-0c8960bd8cdbfa966  running  vpc-8e30a0e8  t2.medium   10.1.101.29   None            DIYZ-SCALE-ADMIN
+
+
+
+# as per the EC2 Instance
+attachment.status - The attachment state (attaching | attached | detaching | detached ).
+
+# as per the volume itself
+status - The status of the volume (creating | available | in-use | deleting | deleted | error ).
+
+# finding unused volumes
+aws ec2 describe-volumes --filters Name=status,Values=available | jq .
+
+volstat () {
+# finding volumes for a given EC2 instance
+#
+export ec2ID=$1
+
+echo
+#
+  aws ec2 describe-instances --instance-ids ${ec2ID} \
+    --query 'Reservations[*].Instances[*].[InstanceId,State.Name,InstanceType,Tags[?Key==`Name`].Value[]]' \
+    | egrep -v '\[|\]' | tr -d ' |"' | tr '\012' ' ' ; echo
+#
+  aws ec2 describe-volumes --region us-east-1 \
+    --filters Name=attachment.instance-id,Values="${ec2ID}" \
+    Name=attachment.delete-on-termination,Values=true | jq .
+}
+
+aws ec2 describe-snapshots --filters "Name=volume-id, Values=vol-0dcaa0f6c71da42b4,vol-0dcaa0f6c71da42b4"
+
+owner-id
+
+aws ec2 describe-snapshots --filters "Name=owner-id , Values=vol-0dcaa0f6c71da42b4,vol-0dcaa0f6c71da42b4"
+
+
+# Find the most recent snapshot for an AWS EBS volume
+# max-by = most recent / min_by oldest
+#
+export volID='vol-0dcaa0f6c71da42b4'
+#
+aws ec2 describe-snapshots --filter "Name=volume-id,Values=${volID}" | jq '.[]|min_by(.StartTime)|.SnapshotId' | jq .
+#
+
+# Deleting_old_Amazon_EBS_snapshots - excellent - how to
+https://wincent.com/wiki/Deleting_old_Amazon_EBS_snapshots
+
+
+"InstanceId": "i-0013d4c060cbf7cf3",
+"VolumeId": "vol-0dcaa0f6c71da42b4",
+
+"SnapshotId": "snap-08a46278c02caa366",
+"CreateTime": "2017-01-31T16:15:22.003Z",
+
+# create-snapshot
+export ec2ID='i-0013d4c060cbf7cf3'
+export volID='vol-0dcaa0f6c71da42b4'
+#
+aws ec2 create-snapshot --volume-id "${volID}" \
+--description "intance ${ec2ID} volume ${volID}" | jq .
+
+{
+  "Description": "This was created by jdlt - create-snapshot",
+  "Encrypted": false,
+  "VolumeId": "vol-0dcaa0f6c71da42b4",
+  "State": "pending",
+  "VolumeSize": 8,
+  "StartTime": "2017-08-15T15:31:56.000Z",
+  "Progress": "",
+  "OwnerId": "501206826579",
+  "SnapshotId": "snap-0262313b756f00fa1"
+}
+
+#
+export ec2ID='i-0013d4c060cbf7cf3'
+export volID='vol-0dcaa0f6c71da42b4'
+# create-image AMI
+aws ec2 create-image --instance-id ${ec2ID} \
+--no-reboot \
+--name "intance ${ec2ID} volume ${volID}" | jq .
+#  "ImageId": "ami-4c3d0e37"
+
+
+# create-image AMI
+aws ec2 describe-snapshot --instance-id ${ec2ID} \
+--name "intance ${ec2ID} volume ${volID}" | jq .
+#  "ImageId": "ami-4c3d0e37"
+
+aws ec2 describe-snapshots \
+--query 'Snapshots[*].{ID:SnapshotId,Time:StartTime}'
+
+#--filters Name=tag-key,Values="Group" Name=tag-value,Values="Prod"
+
+export starttime=$(gdate -u '+%FT%TZ' -d '7 days ago') \
+
+aws ec2 describe-snapshots --output text | sort -k 5 | head -200
+
+aws ec2 describe-snapshots \
+--query 'Snapshots[*].{ID:SnapshotId,Time:$StartTime}'
+
+aws ec2 delete-snapshot --snapshot-id snap-4e665454
+
+#####
+
+
+aws ec2 describe-instances \
+ --output text \
+  --query 'Reservations[].Instances[].[Tags[?Key==`Name`].Value|[0],InstanceId]'
+
+# Display InstanceId of instances which have no Name tag:
+  aws ec2 describe-instances \
+    --output text \
+     --query 'Reservations[].Instances[?!not_null(Tags[?Key == `Name`].Value)] | [].[InstanceId]'
+
+# Display InstanceId of running instances which have no Owner tag:
+
+aws ec2 describe-instances \
+  --output text \
+   --filters Name=instance-state-name,Values=running \
+   --query 'Reservations[].Instances[?!not_null(Tags[?Key == `Owner`].Value)] | [].[InstanceId]'
+
+# https://blog.corpinfo.com/using-aws-cli-to-find-untagged-instances
+
+### How to clean up Amazon EBS Volumes and Snapshots
+http://www.robertsindall.co.uk/blog/blog/2013/04/20/how-to-clean-up-amazon-ebs-volumes-and-snapshots/
+
+EBS Volumes available to remove
+aws ec2 describe-volumes --region us-east-1 | grep available | awk '{print $2}' | tr '\n' ' '
+
+All Snapshots - tried tex and table - neight weems to work
+aws ec2 describe-snapshots --region us-east-1 --output table | grep SNAPSHOT | awk '{print $2}' | sort | uniq
+
+All Snapshots not in use by any AMI’s // delete all volumes which are unattached
+ec2-delete-volume --regionus-east-1 $(aws ec2 describe-volumes --region us-east-1  | grep available | awk '{print $2}' | tr '\n' ' ')
+
+#
+aws ec2 monitor-instances --instance-ids i-44a44ac3
+
+http://www.thegeekstuff.com/2016/04/aws-ec2-cli-examples/
+
+yet another useless script https://devopsideas.com/automate-ebs-volume-snapshot/
+
+printf 'import random\nfor i in range(1000):\n print random.randint(0,10000)'|\
+    python - | /usr/local/bin/histogram.py -l
+
+•*´¯)¸.•*´¯)¤ª"˜¨¯¯¨˜ " jorgedlt@gmail.com " ˜¨¯¯¨˜"ª¤(¯`*•.¸(¯`*•
